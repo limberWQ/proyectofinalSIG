@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}Nueva ruta{% endblock %}
+{% block content %}
+<h2 class="mb-2">Generar ruta automática por carretera</h2>
+<p class="text-muted mb-2">
+    Escribe el origen y destino del viaje. El sistema buscará las coordenadas (geocodificación)
+    y calculará automáticamente el camino real por carretera entre ambos puntos, igual que un
+    mapa de navegación.
+</p>
+
+<form method="POST" id="form-ruta">
+    <div class="card">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="id_viaje">Viaje</label>
+                <select id="id_viaje" name="id_viaje" required>
+                    <option value="">Seleccionar viaje...</option>
+                    {% for v in viajes %}
+                    <option value="{{ v.id_viaje }}" data-origen="{{ v.origen }}" data-destino="{{ v.destino }}">
+                        {{ v.origen }} → {{ v.destino }} | {{ v.fecha_viaje.strftime("%d/%m/%Y") }} {{ v.hora_salida.strftime("%H:%M") }} | Bus {{ v.bus.placa }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="nombre">Nombre de la ruta</label>
+                <input type="text" id="nombre" name="nombre" required maxlength="150" placeholder="Se completa automáticamente">
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="origen_input">Ciudad/lugar de origen</label>
+                <input type="text" id="origen_input" required placeholder="Ej. La Paz, Bolivia">
+            </div>
+            <div class="form-group">
+                <label for="destino_input">Ciudad/lugar de destino</label>
+                <input type="text" id="destino_input" required placeholder="Ej. Cochabamba, Bolivia">
+            </div>
+        </div>
+
+        <div class="btn-group mb-2">
+            <button type="button" id="btn-calcular" class="btn btn-primary">Calcular ruta por carretera</button>
+        </div>
+
+        <div id="estado-calculo" class="text-muted"></div>
+
+        <div id="map" style="height:450px; border-radius:8px; margin-top:0.5rem;"></div>
+
+        <div id="resumen-ruta" class="mt-2" style="display:none;">
+            <p><strong>Distancia:</strong> <span id="resumen-distancia"></span> km &nbsp;|&nbsp;
+               <strong>Duración estimada:</strong> <span id="resumen-duracion"></span></p>
+        </div>
+
+        <input type="hidden" name="puntos" id="puntos">
+        <input type="hidden" name="origen_texto" id="origen_texto">
+        <input type="hidden" name="destino_texto" id="destino_texto">
+        <input type="hidden" name="distancia_km" id="distancia_km">
+        <input type="hidden" name="duracion_min" id="duracion_min">
+
+        <div class="btn-group mt-2">
+            <button type="submit" id="btn-guardar" class="btn btn-success" disabled>Guardar ruta</button>
+            <a href="{{ url_for('rutas.listar') }}" class="btn btn-secondary">Cancelar</a>
+        </div>
+    </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const mapa = crearMapa("map");
+    let rutaCalculada = null;
+
+    const selectViaje = document.getElementById("id_viaje");
+    const origenInput = document.getElementById("origen_input");
+    const destinoInput = document.getElementById("destino_input");
+    const nombreInput = document.getElementById("nombre");
+    const btnCalcular = document.getElementById("btn-calcular");
+    const btnGuardar = document.getElementById("btn-guardar");
+    const estadoCalculo = document.getElementById("estado-calculo");
+    const resumenRuta = document.getElementById("resumen-ruta");
+
+    // Al elegir un viaje, precargar origen/destino desde sus datos
+    selectViaje.addEventListener("change", function () {
+        const opcion = selectViaje.selectedOptions[0];
+        if (!opcion || !opcion.dataset.origen) return;
+        origenInput.value = opcion.dataset.origen + ", Bolivia";
+        destinoInput.value = opcion.dataset.destino + ", Bolivia";
+        nombreInput.value = opcion.dataset.origen + " - " + opcion.dataset.destino;
+    });
+
+    mapa.on("load", function () {
+        mapa.addSource("ruta", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        mapa.addLayer({
+            id: "ruta-linea",
+            type: "line",
+            source: "ruta",
+            layout: { "line-join": "round", "line-cap": "round" },
+            paint: { "line-color": "#2563eb", "line-width": 5, "line-opacity": 0.85 },
+        });
+    });
+
+    let marcadorOrigen = null;
+    let marcadorDestino = null;
+
+    function limpiarMarcadores() {
+        if (marcadorOrigen) { marcadorOrigen.remove(); marcadorOrigen = null; }
+        if (marcadorDestino) { marcadorDestino.remove(); marcadorDestino = null; }
+    }
+
+    btnCalcular.addEventListener("click", async function () {
+        const textoOrigen = origenInput.value.trim();
+        const textoDestino = destinoInput.value.trim();
+
+        if (!textoOrigen || !textoDestino) {
+            alert("Completa el origen y el destino.");
+            return;
+        }
+
+        btnCalcular.disabled = true;
+        btnGuardar.disabled = true;
+        estadoCalculo.textContent = "Buscando coordenadas de \"" + textoOrigen + "\"...";
+
+        try {
+            const origen = await geocodificar(textoOrigen);
+            if (!origen) throw new Error('No se encontró "' + textoOrigen + '". Intenta ser más específico (ej. agregar el departamento).');
+
+            estadoCalculo.textContent = "Buscando coordenadas de \"" + textoDestino + "\"...";
+            const destino = await geocodificar(textoDestino);
+            if (!destino) throw new Error('No se encontró "' + textoDestino + '". Intenta ser más específico (ej. agregar el departamento).');
+
+            estadoCalculo.textContent = "Calculando el camino por carretera...";
+            const resultado = await calcularRutaPorCarretera(origen, destino);
+
+            rutaCalculada = resultado;
+
+            // Dibujar la ruta en el mapa
+            mapa.getSource("ruta").setData(puntosALineString(resultado.puntos));
+
+            limpiarMarcadores();
+            marcadorOrigen = new maplibregl.Marker({ color: "#16a34a" })
+                .setLngLat([origen.lng, origen.lat]).setPopup(new maplibregl.Popup().setText("Origen: " + textoOrigen))
+                .addTo(mapa);
+            marcadorDestino = new maplibregl.Marker({ color: "#dc2626" })
+                .setLngLat([destino.lng, destino.lat]).setPopup(new maplibregl.Popup().setText("Destino: " + textoDestino))
+                .addTo(mapa);
+
+            const bounds = calcularBounds(resultado.puntos);
+            mapa.fitBounds(bounds, { padding: 50 });
+
+            document.getElementById("resumen-distancia").textContent = resultado.distanciaKm.toFixed(1);
+            const horas = Math.floor(resultado.duracionMin / 60);
+            const minutos = Math.round(resultado.duracionMin % 60);
+            document.getElementById("resumen-duracion").textContent = (horas > 0 ? horas + " h " : "") + minutos + " min";
+            resumenRuta.style.display = "block";
+
+            document.getElementById("puntos").value = JSON.stringify(resultado.puntos);
+            document.getElementById("origen_texto").value = textoOrigen;
+            document.getElementById("destino_texto").value = textoDestino;
+            document.getElementById("distancia_km").value = resultado.distanciaKm.toFixed(2);
+            document.getElementById("duracion_min").value = resultado.duracionMin.toFixed(1);
+
+            estadoCalculo.textContent = "Ruta calculada correctamente (" + resultado.puntos.length + " puntos siguiendo la carretera).";
+            btnGuardar.disabled = false;
+        } catch (err) {
+            estadoCalculo.textContent = "";
+            alert(err.message || "Ocurrió un error al calcular la ruta.");
+        } finally {
+            btnCalcular.disabled = false;
+        }
+    });
+
+    document.getElementById("form-ruta").addEventListener("submit", function (e) {
+        if (!rutaCalculada) {
+            e.preventDefault();
+            alert('Primero calcula la ruta con el botón "Calcular ruta por carretera".');
+        }
+    });
+});
+</script>
+{% endblock %}

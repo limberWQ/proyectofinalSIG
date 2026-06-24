@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Transporte Interdepartamental{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    {% if session.id_usuario %}
+    <header class="topbar">
+        <div class="topbar-brand">
+            <span class="brand-icon">🚌</span>
+            <span>Transporte Interdepartamental</span>
+        </div>
+        <nav class="topbar-nav">
+            {% if session.rol == "chofer" %}
+                <a href="{{ url_for('chofer_panel.mis_viajes') }}">Mis Viajes</a>
+            {% else %}
+                <a href="{{ url_for('dashboard.index') }}">Inicio</a>
+                <a href="{{ url_for('viajes.listar') }}">Viajes</a>
+                <a href="{{ url_for('rutas.listar') }}">Rutas</a>
+                <a href="{{ url_for('flota.monitoreo') }}">Monitoreo de Flota</a>
+                <a href="{{ url_for('ventas.listar') }}">Ventas</a>
+                <a href="{{ url_for('facturas.listar') }}">Facturas</a>
+                <a href="{{ url_for('pasajeros.listar') }}">Pasajeros</a>
+                <a href="{{ url_for('buses.listar') }}">Buses</a>
+                <a href="{{ url_for('choferes.listar') }}">Choferes</a>
+                <a href="{{ url_for('caja.listar') }}">Caja</a>
+            {% endif %}
+        </nav>
+        <div class="topbar-user">
+            <span>{{ session.nombre }} <small>({{ session.rol }})</small></span>
+            <a href="{{ url_for('auth.logout') }}" class="btn btn-sm btn-outline">Salir</a>
+        </div>
+    </header>
+    {% endif %}
+
+    <main class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-container">
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="{{ url_for('static', filename='js/maps.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}{{ viaje.origen }} → {{ viaje.destino }}{% endblock %}
+{% block content %}
+<div class="mb-2">
+    <a href="{{ url_for('chofer_panel.mis_viajes') }}" class="text-muted">← Volver a mis viajes</a>
+</div>
+
+<h2 class="mb-2">{{ viaje.origen }} → {{ viaje.destino }}</h2>
+<p class="text-muted mb-2">{{ viaje.fecha_viaje.strftime("%d/%m/%Y") }} — Salida {{ viaje.hora_salida.strftime("%H:%M") }} — Bus {{ viaje.bus.placa }}</p>
+
+<div class="grid grid-2">
+    <div class="card">
+        <h3>Transmisión GPS</h3>
+        <p class="text-muted">
+            Activa la transmisión al iniciar el viaje. Tu ubicación se enviará automáticamente
+            mientras esta página permanezca abierta, para que el administrador pueda monitorear
+            el recorrido del bus en tiempo real.
+        </p>
+
+        <div id="estado" class="alert alert-info">Presiona el botón para iniciar la transmisión.</div>
+
+        <button id="btn-iniciar" class="btn btn-success">Iniciar transmisión GPS</button>
+        <button id="btn-detener" class="btn btn-danger mt-1" style="display:none;">Detener transmisión</button>
+
+        <p class="text-muted mt-2" style="font-size:0.85rem;">
+            Deja la pantalla del celular encendida y no cierres el navegador durante el viaje.
+        </p>
+    </div>
+
+    <div class="card">
+        {% if viaje.ruta and viaje.ruta.distancia_km %}
+        <p><strong>Distancia:</strong> {{ "%.1f"|format(viaje.ruta.distancia_km) }} km</p>
+        {% endif %}
+        <div id="map" style="height:400px; border-radius:8px;"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const idViaje = {{ viaje.id_viaje }};
+    const puntosRuta = {{ (viaje.ruta.puntos if viaje.ruta else [])|tojson }};
+
+    // --- Mapa con la ruta real ---
+    const mapa = crearMapa("map", { zoom: 6 });
+    let marcadorYo = null;
+
+    mapa.on("load", function () {
+        if (puntosRuta.length > 1) {
+            mapa.addSource("ruta", { type: "geojson", data: puntosALineString(puntosRuta) });
+            mapa.addLayer({
+                id: "ruta-linea", type: "line", source: "ruta",
+                layout: { "line-join": "round", "line-cap": "round" },
+                paint: { "line-color": "#2563eb", "line-width": 5, "line-opacity": 0.85 },
+            });
+            new maplibregl.Marker({ color: "#16a34a" }).setLngLat([puntosRuta[0][1], puntosRuta[0][0]]).addTo(mapa);
+            const ultimo = puntosRuta[puntosRuta.length - 1];
+            new maplibregl.Marker({ color: "#dc2626" }).setLngLat([ultimo[1], ultimo[0]]).addTo(mapa);
+            mapa.fitBounds(calcularBounds(puntosRuta), { padding: 40 });
+        }
+    });
+
+    // --- Transmisión GPS real ---
+    const estado = document.getElementById("estado");
+    const btnIniciar = document.getElementById("btn-iniciar");
+    const btnDetener = document.getElementById("btn-detener");
+    let watchId = null;
+    let enviosOk = 0;
+
+    function mostrarMiPosicion(lat, lng) {
+        const lngLat = [lng, lat];
+        if (!marcadorYo) {
+            const el = document.createElement("div");
+            el.style.fontSize = "26px";
+            el.textContent = "🚌";
+            marcadorYo = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapa);
+        } else {
+            marcadorYo.setLngLat(lngLat);
+        }
+    }
+
+    function enviarPosicion(lat, lng, precision) {
+        fetch("/gps/actualizar-posicion", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id_viaje: idViaje, lat: lat, lng: lng, precision: precision }),
+        })
+        .then(resp => resp.json())
+        .then(data => {
+            if (data.ok) {
+                enviosOk += 1;
+                estado.className = "alert alert-success";
+                estado.textContent = "Transmitiendo correctamente. Posiciones enviadas: " + enviosOk;
+                mostrarMiPosicion(lat, lng);
+            } else {
+                estado.className = "alert alert-danger";
+                estado.textContent = "Error: " + (data.error || "no se pudo enviar la posición.");
+                detener();
+            }
+        })
+        .catch(() => {
+            estado.className = "alert alert-warning";
+            estado.textContent = "Sin conexión. Reintentando en el siguiente envío...";
+        });
+    }
+
+    function iniciar() {
+        if (!navigator.geolocation) {
+            estado.className = "alert alert-danger";
+            estado.textContent = "Este navegador no soporta geolocalización.";
+            return;
+        }
+        watchId = navigator.geolocation.watchPosition(
+            function (pos) {
+                enviarPosicion(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+            },
+            function (err) {
+                estado.className = "alert alert-danger";
+                estado.textContent = "No se pudo obtener tu ubicación: " + err.message + ". Verifica el permiso de ubicación.";
+            },
+            { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+        );
+        btnIniciar.style.display = "none";
+        btnDetener.style.display = "inline-block";
+        estado.className = "alert alert-info";
+        estado.textContent = "Obteniendo ubicación...";
+    }
+
+    function detener() {
+        if (watchId !== null) {
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+        }
+        btnIniciar.style.display = "inline-block";
+        btnDetener.style.display = "none";
+        estado.className = "alert alert-warning";
+        estado.textContent = "Transmisión detenida.";
+    }
+
+    btnIniciar.addEventListener("click", iniciar);
+    btnDetener.addEventListener("click", detener);
+});
+</script>
+{% endblock %}

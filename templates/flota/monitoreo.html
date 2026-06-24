@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block title %}Monitoreo de Flota{% endblock %}
+{% block content %}
+<h2 class="mb-2">Monitoreo de Flota en Tiempo Real</h2>
+<p class="text-muted mb-2">Visualiza todos los viajes del día con ruta asignada, siguiendo el trazado real por carretera. Si el chofer transmite su ubicación desde su celular, se muestra su posición real; en caso contrario, se simula el recorrido sobre la ruta.</p>
+
+<div class="grid" style="grid-template-columns: 1fr 2fr; gap:1rem;">
+    <div class="card">
+        <h3>Viajes de hoy</h3>
+        <div id="lista-viajes">
+            <p class="text-muted">Cargando viajes...</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div id="map" style="height:500px; border-radius:8px;"></div>
+        <div id="info-viaje" class="mt-2"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const mapa = crearMapa("map");
+
+    const listaViajes = document.getElementById("lista-viajes");
+    const infoViaje = document.getElementById("info-viaje");
+
+    let marcadorBus = null;
+    let intervaloSimulacion = null;
+    let intervaloPolling = null;
+    let capasDibujadas = [];
+
+    const colorPorEstado = {
+        programado: "#2563eb",
+        finalizado: "#16a34a",
+        cancelado: "#dc2626",
+    };
+
+    const busEl = document.createElement("div");
+    busEl.style.fontSize = "26px";
+    busEl.textContent = "🚌";
+
+    function limpiarSeguimiento() {
+        if (intervaloSimulacion) { clearInterval(intervaloSimulacion); intervaloSimulacion = null; }
+        if (intervaloPolling) { clearInterval(intervaloPolling); intervaloPolling = null; }
+        if (marcadorBus) { marcadorBus.remove(); marcadorBus = null; }
+    }
+
+    function limpiarCapasRutas() {
+        capasDibujadas.forEach(id => {
+            if (mapa.getLayer(id)) mapa.removeLayer(id);
+            if (mapa.getSource(id)) mapa.removeSource(id);
+        });
+        capasDibujadas = [];
+    }
+
+    function dibujarTodasLasRutas(viajes) {
+        limpiarCapasRutas();
+        let todosPuntos = [];
+
+        viajes.forEach(v => {
+            const id = "ruta-" + v.id_viaje;
+            const color = colorPorEstado[v.estado] || "#64748b";
+            mapa.addSource(id, { type: "geojson", data: puntosALineString(v.puntos) });
+            mapa.addLayer({
+                id: id, type: "line", source: id,
+                layout: { "line-join": "round", "line-cap": "round" },
+                paint: { "line-color": color, "line-width": 4, "line-opacity": 0.7 },
+            });
+            capasDibujadas.push(id);
+            todosPuntos = todosPuntos.concat(v.puntos);
+        });
+
+        if (todosPuntos.length) {
+            mapa.fitBounds(calcularBounds(todosPuntos), { padding: 40 });
+        }
+    }
+
+    function crearMarcadorBus(lngLat) {
+        const el = busEl.cloneNode(true);
+        return new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(mapa);
+    }
+
+    function seguirPosicionReal(viaje) {
+        function consultar() {
+            fetch("/flota/posicion/" + viaje.id_viaje)
+                .then(resp => resp.json())
+                .then(data => {
+                    if (!data.disponible) return;
+                    const lngLat = [data.lng, data.lat];
+                    if (!marcadorBus) {
+                        marcadorBus = crearMarcadorBus(lngLat);
+                        mapa.flyTo({ center: lngLat, zoom: 12 });
+                    } else {
+                        marcadorBus.setLngLat(lngLat);
+                    }
+                });
+        }
+        consultar();
+        intervaloPolling = setInterval(consultar, 5000);
+    }
+
+    function simularRecorrido(viaje) {
+        const puntos = viaje.puntos;
+        if (puntos.length < 2) return;
+
+        marcadorBus = crearMarcadorBus([puntos[0][1], puntos[0][0]]);
+        mapa.flyTo({ center: [puntos[0][1], puntos[0][0]], zoom: 8 });
+
+        let segmento = 0, avance = 0;
+        const pasos = 25, velocidadMs = 150;
+
+        intervaloSimulacion = setInterval(function () {
+            if (segmento >= puntos.length - 1) {
+                clearInterval(intervaloSimulacion);
+                intervaloSimulacion = null;
+                return;
+            }
+            const inicio = puntos[segmento], fin = puntos[segmento + 1];
+            avance += 1 / pasos;
+            if (avance > 1) avance = 1;
+
+            const lat = inicio[0] + (fin[0] - inicio[0]) * avance;
+            const lng = inicio[1] + (fin[1] - inicio[1]) * avance;
+            marcadorBus.setLngLat([lng, lat]);
+
+            if (avance >= 1) { segmento += 1; avance = 0; }
+        }, velocidadMs);
+    }
+
+    function iniciarSeguimiento(viaje) {
+        limpiarSeguimiento();
+        if (viaje.posicion_real) {
+            seguirPosicionReal(viaje);
+        } else {
+            simularRecorrido(viaje);
+        }
+    }
+
+    function mostrarInfoViaje(v) {
+        const origenGps = v.posicion_real
+            ? `<span class="badge badge-success">GPS real (${v.posicion_real.actualizado_en})</span>`
+            : `<span class="badge badge-warning">Simulación (chofer aún no transmite)</span>`;
+
+        infoViaje.innerHTML = `
+            <div class="card" style="margin:0;">
+                <p><strong>${v.origen} → ${v.destino}</strong></p>
+                <p>Hora de salida: ${v.hora_salida}</p>
+                <p>Bus: ${v.bus} | Chofer: ${v.chofer}</p>
+                <p>Asientos: ${v.asientos_disponibles} disponibles de ${v.asientos_total}</p>
+                <p>Estado: <span class="badge badge-blue">${v.estado}</span></p>
+                <p>Origen de posición: ${origenGps}</p>
+            </div>
+        `;
+    }
+
+    function cargarViajes() {
+        fetch("/flota/datos")
+            .then(resp => resp.json())
+            .then(data => {
+                const viajes = data.viajes;
+
+                if (viajes.length === 0) {
+                    listaViajes.innerHTML = '<p class="empty-state">No hay viajes con ruta asignada para hoy.</p>';
+                    return;
+                }
+
+                listaViajes.innerHTML = "";
+                viajes.forEach(v => {
+                    const item = document.createElement("div");
+                    item.className = "card";
+                    item.style.cursor = "pointer";
+                    item.style.marginBottom = "0.75rem";
+                    item.style.padding = "0.75rem 1rem";
+                    item.innerHTML = `
+                        <strong>${v.origen} → ${v.destino}</strong><br>
+                        <small class="text-muted">${v.hora_salida} | Bus ${v.bus}</small><br>
+                        <span class="badge badge-blue">${v.estado}</span>
+                        ${v.posicion_real ? '<span class="badge badge-success">GPS</span>' : ''}
+                    `;
+                    item.addEventListener("click", function () {
+                        mostrarInfoViaje(v);
+                        iniciarSeguimiento(v);
+                    });
+                    listaViajes.appendChild(item);
+                });
+
+                const dibujar = () => dibujarTodasLasRutas(viajes);
+                if (mapa.isStyleLoaded()) dibujar(); else mapa.on("load", dibujar);
+            })
+            .catch(() => {
+                listaViajes.innerHTML = '<p class="empty-state">No se pudieron cargar los viajes.</p>';
+            });
+    }
+
+    mapa.on("load", cargarViajes);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Mis Viajes{% endblock %}
+{% block content %}
+<h2 class="mb-2">Hola, {{ chofer.nombres }} 👋</h2>
+<p class="text-muted mb-2">Estos son tus próximos viajes programados. Selecciona uno para ver la ruta completa y transmitir tu ubicación durante el recorrido.</p>
+
+<div class="grid grid-2">
+    {% for v in viajes %}
+    <div class="card">
+        <h3>{{ v.origen }} → {{ v.destino }}</h3>
+        <p><strong>Fecha:</strong> {{ v.fecha_viaje.strftime("%d/%m/%Y") }}</p>
+        <p><strong>Hora de salida:</strong> {{ v.hora_salida.strftime("%H:%M") }}</p>
+        <p><strong>Bus:</strong> {{ v.bus.placa }} ({{ v.bus.modelo }})</p>
+        <p><strong>Asientos vendidos:</strong> {{ v.asientos_ocupados }} / {{ v.viaje_asientos|length }}</p>
+        <p>
+            <strong>Ruta:</strong>
+            {% if v.ruta %}
+            <span class="badge badge-success">Disponible</span>
+            {% else %}
+            <span class="badge badge-warning">Aún no asignada por el administrador</span>
+            {% endif %}
+        </p>
+        {% if v.ruta %}
+        <a href="{{ url_for('chofer_panel.ver_viaje', id_viaje=v.id_viaje) }}" class="btn btn-primary mt-1">Ver ruta y transmitir GPS</a>
+        {% endif %}
+    </div>
+    {% else %}
+    <p class="empty-state">No tienes viajes programados por el momento.</p>
+    {% endfor %}
+</div>
+{% endblock %}

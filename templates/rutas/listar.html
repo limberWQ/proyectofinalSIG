@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Rutas{% endblock %}
+{% block content %}
+<div class="mb-2" style="display:flex; justify-content:space-between; align-items:center;">
+    <h2>Rutas geográficas</h2>
+    <a href="{{ url_for('rutas.crear') }}" class="btn btn-primary">+ Nueva ruta</a>
+</div>
+
+<div class="table-wrapper">
+    <table>
+        <thead>
+            <tr>
+                <th>Nombre</th>
+                <th>Viaje</th>
+                <th>Bus</th>
+                <th>Distancia</th>
+                <th>Duración est.</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for ruta in rutas %}
+            <tr>
+                <td>{{ ruta.nombre }}</td>
+                <td>{{ ruta.viaje.origen }} → {{ ruta.viaje.destino }} ({{ ruta.viaje.fecha_viaje.strftime("%d/%m/%Y") }})</td>
+                <td>{{ ruta.viaje.bus.placa }}</td>
+                <td>{% if ruta.distancia_km %}{{ "%.1f"|format(ruta.distancia_km) }} km{% else %}-{% endif %}</td>
+                <td>
+                    {% if ruta.duracion_min %}
+                        {% set horas = (ruta.duracion_min // 60)|int %}
+                        {% set minutos = (ruta.duracion_min % 60)|int %}
+                        {% if horas > 0 %}{{ horas }} h {% endif %}{{ minutos }} min
+                    {% else %}-{% endif %}
+                </td>
+                <td class="btn-group">
+                    <a href="{{ url_for('rutas.editar', id_ruta=ruta.id_ruta) }}" class="btn btn-sm btn-secondary">Editar</a>
+                    <form method="POST" action="{{ url_for('rutas.eliminar', id_ruta=ruta.id_ruta) }}" onsubmit="return confirmarAccion('¿Eliminar esta ruta?')">
+                        <button type="submit" class="btn btn-sm btn-danger">Eliminar</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="empty-state">No hay rutas registradas.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
